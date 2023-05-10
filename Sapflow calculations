@@ -1,0 +1,384 @@
+pacman::p_load(lubridate, readr, dplyr, tidyr, ggplot2, tibble, cowplot, plotly, xts, 
+               dygraphs, plantecophys,viridis, chron, sfsmisc)
+
+
+setwd("")
+#transition zone
+{
+  
+  msmTR_kvalues <- read_csv("")
+  #calculate Js values from K
+  msmTR_jsvalues <- msmTR_kvalues %>%
+    mutate_at(vars(starts_with("s")), ~ 42.84 * .^1.231) %>%
+    select(1:17)
+  lapply(msmTR_jsvalues, as.numeric)
+  colnames(msmTR_jsvalues)=c("record","day","hour","vpd","par",
+                             "s1","s2","s3","s4","s5","s6","s7",
+                             "s8","s9","s10","s11","s12")
+  #add and format and average all data
+  
+  
+  #shallow
+  msmTR_shallow <- msmTR_jsvalues %>%
+    select(day, hour, "s1","s2","s3","s4","s5","s6","s7", "s8") %>%
+    pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>%
+    mutate(sensor = parse_number(sensor), value = as.numeric(value))
+  
+  #deep
+  
+  msmTR_deep <- msmTR_jsvalues %>% 
+    select(day, hour , "s9", "s10", "s11", "s12") %>% rename(s3=s9,s4=s10,s5=s11,s7=s12) %>% select(day, hour, starts_with("s")) %>%
+    pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>% mutate(sensor = parse_number(sensor), value = as.numeric(value))
+  
+  msmTR_full <- merge(msmTR_shallow[c("day", "hour", "sensor", "value")], 
+                      msmTR_deep[c("day", "hour", "sensor", "value")], 
+                      by = c("day", "hour", "sensor"), all = TRUE)
+  colnames(msmTR_full) <- c("day", "hour", "tree", "shallow", "deep")
+  
+  msmTR_full$dbh <-c("22.8", "26.8", "19.8", "19.6", "24.8", "22.4", "23.4", "20.8")
+  msmTR_full$sw <- c("4.1", "4.4", "3.7", "4.1", "5.7", "7.7", "5.1", "4.5")
+  
+  msmTR_full <- apply(msmTR_full, 2, as.numeric)
+  msmTR_full <- as.data.frame(msmTR_full)
+}
+#upland zone 
+{
+  msmUP_kvalues <- read_csv("")
+  msmUP_jsvalues <- msmUP_kvalues %>%
+    mutate_at(vars(starts_with("s")), ~ 42.84 * .^1.231) %>%
+    select(1:17)
+  lapply(msmUP_jsvalues, as.numeric)
+  colnames(msmUP_jsvalues)=c("record","day","hour","vpd","par",
+                             "s1","s2","s3","s4","s5","s6","s7",
+                             "s8","s9","s10","s11","s12")
+  
+  #add and format and average all data
+  
+  
+  #shallow
+  msmUP_shallow <- msmUP_jsvalues %>%
+    select(day, hour, "s1","s2","s3","s4","s5","s6","s7", "s8") %>%
+    pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>%
+    mutate(sensor = parse_number(sensor), value = as.numeric(value))
+  
+  #deep
+  
+  msmUP_deep <- msmUP_jsvalues %>% 
+    select(day, hour , "s9", "s10", "s11", "s12") %>% rename(s1=s9,s2=s10,s3=s11,s4=s12) %>% select(day, hour, starts_with("s")) %>%
+    pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>% mutate(sensor = parse_number(sensor), value = as.numeric(value))
+  
+  msmUP_full <- merge(msmUP_shallow[c("day", "hour", "sensor", "value")], 
+                      msmUP_deep[c("day", "hour", "sensor", "value")], 
+                      by = c("day", "hour", "sensor"), all = TRUE)
+  colnames(msmUP_full) <- c("day", "hour", "tree", "shallow", "deep")
+  
+  msmUP_full$dbh <-c("31.4", "45.0", "24.8", "32.4", "32.6", "34.8", "39.8", "36.2")
+  msmUP_full$sw <- c("4.5", "7.3", "7", "7.1", "7.9", "8.9", "8.7", "5.3")
+  msmUP_full <- apply(msmUP_full, 2, as.numeric)
+  msmUP_full <- as.data.frame(msmUP_full)
+  
+}
+
+#radial Flux and identifying the slope of the flux 'beta' in cm^3/hr
+{
+  #transition zone
+  {
+    # calculate the averages of the shallow, deep, and SW columns for each tree
+    msmTR_full_average <- msmTR_full %>%
+      select(tree, shallow, deep, sw) %>%
+      group_by(tree) %>%
+      summarize(s_avg = mean(shallow, na.rm = TRUE),
+                d_avg = mean(deep, na.rm = TRUE),
+                swdepth = first(sw),
+                sw_avg = 0) %>%
+      mutate(sdepth = 2,
+             swdepth = as.numeric(swdepth),
+             ddepth = 3.5,
+             zer0depth = 0,
+             zer0avg = as.numeric(s_avg)) %>%
+      select(tree, zer0depth, zer0avg, sdepth, s_avg, ddepth, d_avg, swdepth, sw_avg)
+    
+    dffullmsmTR <- bind_cols(
+      msmTR_full_average %>%
+        select(-3, -5, -7, -9) %>%
+        pivot_longer(
+          cols = -tree,
+          names_to = "xcol",
+          values_to = "x"
+        ),
+      msmTR_full_average %>%
+        select(-2, -4, -6, -8) %>%
+        pivot_longer(
+          cols = -tree,
+          names_to = "ycol",
+          values_to = "y"
+        ) %>%
+        select(-tree)
+    ) %>%
+      select(-xcol, -ycol) %>%
+      mutate(tree = factor(tree))
+    
+    
+    
+    # add rows to the dataframe to create a complete grid of x and y values for each tree
+    dffullmsmTR <- bind_rows(
+      # add the original data frame, excluding rows with NaN values
+      dffullmsmTR[complete.cases(dffullmsmTR), ]
+    )
+    
+    
+    #what are the slopes (beta)?
+    # Split the data by tree
+    SdfmsmTR <- split(dffullmsmTR, dffullmsmTR$tree)
+    
+    # Calculate the slope and length (len) of each line segment between consecutive points for each tree
+    slopesmsmTR <- lapply(SdfmsmTR, function(segments) {
+      diff_y <- diff(segments$y)
+      diff_x <- diff(segments$x)
+      len <- sqrt(diff_x^2 + diff_y^2)
+      slopemsmTR <- diff_y / diff_x
+      return(data.frame(slopemsmTR, len))
+    })
+    
+    # Calculate the weighted average slope for each tree
+    msmTR_beta <- sapply(slopesmsmTR, function(df) {
+    ##  weighted.mean(df$slopemsmTR, df$len, na.rm = TRUE)  #this needs fixing df$len into x length not line length
+    })
+    
+    #make into a datafrmae
+    msmTR_beta <-data.frame(msmTR_beta) %>% mutate(tree = 1:8) %>% rename(slope = 1)
+    
+    msmTR_full <- merge(msmTR_full, msmTR_beta, by = "tree")
+    
+    
+    # create a scatterplot of the data with lines connecting the points
+    dffullplot_msmTR <- ggplot(dffullmsmTR, aes(x, y, color = tree)) +
+      geom_point(size = 2) +
+      geom_line(aes(group = tree)) +
+      labs(title = "msm TR Radial Sap Flux",
+           subtitle = "Change in Sap Flux in Relation to Cambrium Depth; sensors at 2cm",
+           x = "Cambrium Depth",
+           y = "Sap Flux (cm^3/hr)")
+    
+    
+    
+    dffullplot_msmTR
+    
+  }
+  #upland zone
+  {
+    # calculate the averages of the shallow, deep, and SW columns for each tree
+    msmUP_full_average <- msmUP_full %>%
+      select(tree, shallow, deep, sw) %>%
+      group_by(tree) %>%
+      summarize(s_avg = mean(shallow, na.rm = TRUE),
+                d_avg = mean(deep, na.rm = TRUE),
+                swdepth = first(sw),
+                sw_avg = 0) %>%
+      mutate(sdepth = 2,
+             swdepth = as.numeric(swdepth),
+             ddepth = 3.5,
+             zer0depth = 0,
+             zer0avg = as.numeric(s_avg)) %>%
+      select(tree, zer0depth, zer0avg, sdepth, s_avg, ddepth, d_avg, swdepth, sw_avg)
+    
+    dffullmsmUP <- bind_cols(
+      msmUP_full_average %>%
+        select(-3, -5, -7, -9) %>%
+        pivot_longer(
+          cols = -tree,
+          names_to = "xcol",
+          values_to = "x"
+        ),
+      msmUP_full_average %>%
+        select(-2, -4, -6, -8) %>%
+        pivot_longer(
+          cols = -tree,
+          names_to = "ycol",
+          values_to = "y"
+        ) %>%
+        select(-tree)
+    ) %>%
+      select(-xcol, -ycol) %>%
+      mutate(tree = factor(tree))
+    
+    
+    
+    # add rows to the dataframe to create a complete grid of x and y values for each tree
+    dffullmsmUP <- bind_rows(
+      # add the original data frame, excluding rows with NaN values
+      dffullmsmUP[complete.cases(dffullmsmUP), ]
+    )
+    
+    
+    #what are the slopes (beta)?
+    # Split the data by tree
+    SdfmsmUP <- split(dffullmsmUP, dffullmsmUP$tree)
+    
+    # Calculate the slope and length (len) of each line segment between consecutive points for each tree
+    slopesmsmUP <- lapply(SdfmsmUP, function(segments) {
+      diff_y <- diff(segments$y)
+      diff_x <- diff(segments$x)
+      len <- sqrt(diff_x^2 + diff_y^2)
+      slopemsmUP <- diff_y / diff_x
+      return(data.frame(slopemsmUP, len))
+    })
+    
+    # Calculate the weighted average slope for each tree
+    msmUP_beta <- sapply(slopesmsmUP, function(df) {
+      weighted.mean(df$slopemsmUP, df$len, na.rm = TRUE)
+    })
+    
+    #make into a datafrmae
+    msmUP_beta <-data.frame(msmUP_beta) %>% mutate(tree = 1:8) %>% rename(slope = 1)
+    
+    msmUP_full <- merge(msmUP_full, msmUP_beta, by = "tree")
+    
+    
+    # create a scatterplot of the data with lines connecting the points
+    dffullplot_msmUP <- ggplot(dffullmsmUP, aes(x, y, color = tree)) +
+      geom_point(size = 2) +
+      geom_line(aes(group = tree)) +
+      labs(title = "msm UP Radial Sap Flux",
+           subtitle = "Change in Sap Flux in Relation to Cambrium Depth; sensors at 2cm",
+           x = "Cambrium Depth",
+           y = "Sap Flux (cm^3/hr)")
+    
+    
+    
+    dffullplot_msmUP
+  }
+}
+
+#calculating total flow 'Q'
+# Define the equation for the area of the annular pipe (sapwood)
+calculate_area <- function(dbh,sw) {
+  diameter <- dbh
+  outer_r <- dbh/2
+  inner_r <-  (dbh/2) - sw
+  return(pi * (outer_r^2 - inner_r^2))    
+}
+
+
+#define equation for the calculatoin of average flow across the radius of the sapwood
+{#code applies the calculate_flow function to each row of msmTR_Q, passing the values of sw, slope, and shallow in the current row as arguments. The apply function is used to apply a function to each row (or column) of a matrix or data frame. In this case, we use apply with the MARGIN argument set to 1 to apply the function to each row of msmTR_Q.
+  #The calculate_flow function takes three arguments: sw, which is the sapwood thickness for the current row; slope, which is the slope of the relationship between flow rate and radial distance from the center of the stem for the current row; and shallow, which is the base flow rate for the current row.
+  #The integrate function is called inside the calculate_flow function to integrate the function shallow + slope * x with respect to x over the interval from 0 to sw. This gives us the flow rate for the current row.
+  #Finally, the resulting flow rates are assigned to the flow column of msmTR_Q
+}
+
+calculate_flow <- function(sw, slope, shallow) {
+  integrate(function(x) shallow + (slope * x), lower = 0, upper = sw)$value
+}
+#transition zone
+{
+  #average flow per tree per day
+  msmTR_Q <- msmTR_full %>%
+    select(-deep) %>%
+    aggregate(. ~ day + tree, mean) %>% select(-c (3))
+  
+  
+  # Calculate the area of the annular pipe (sapwood) for each row
+  msmTR_Q <- msmTR_Q %>% mutate(A = calculate_area(dbh,sw))
+  
+  
+  # Calculate the average flow rate across the radius of sapwood
+  # Apply the flow function to each row of msmTR_Q
+  msmTR_Q$flow <- apply(msmTR_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
+  
+  # Calculate the total flow by multiplying the average flow rate by the area
+  msmTR_Q$total_flow <- msmTR_Q$flow * msmTR_Q$A
+  
+  #If Total flow is negative, make zer0
+  msmTR_Q$total_flow <- ifelse(msmTR_Q$total_flow < 0, 0, msmTR_Q$total_flow)
+  
+  
+  
+} 
+
+
+#upland zone
+{
+  #average flow per tree per day
+  msmUP_Q <- msmUP_full %>%
+    select(-deep) %>%
+    aggregate(. ~ day + tree, mean) %>% select(-c (3))
+  
+  
+  # Calculate the area of the annular pipe (sapwood) for each row
+  msmUP_Q <- msmUP_Q %>% mutate(A = calculate_area(dbh,sw))
+  
+  
+  # Calculate the average flow rate across the radius of sapwood
+  # Apply the flow function to each row of msmUP_Q
+  msmUP_Q$flow <- apply(msmUP_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
+  
+  
+  # Calculate the total flow by multiplying the average flow rate by the area
+  msmUP_Q$total_flow <- msmUP_Q$flow * msmUP_Q$A
+  
+  #If Total flow is negative, make zer0
+  msmUP_Q$total_flow <- ifelse(msmUP_Q$total_flow < 0, 0, msmUP_Q$total_flow)
+  
+}
+
+#average Q , slope, Area per site per day
+{# Aggregate total flow by day for msmTR_Q
+  msmTR_Q_agg <- aggregate(cbind(A, slope, total_flow) ~ day, data = msmTR_Q, mean)
+  
+  # Rename 
+  names(msmTR_Q_agg)[2:4] <- c("TR_A", "TR_slope", "TR_flow")
+  # Aggregate total flow by day for msmUP_Q
+  msmUP_Q_agg <-  aggregate(cbind(A, slope, total_flow) ~ day, data = msmUP_Q, mean)
+  
+  # Rename the "total_flow" column to "msmUP_Q_total_flow"
+  names(msmUP_Q_agg)[2:4] <- c("UP_A", "UP_slope", "UP_flow")
+  
+  # Combine the two dataframes into one using the "day" column as the key
+  Q_msm <- merge(msmTR_Q_agg, msmUP_Q_agg, by = "day", all = TRUE)
+}
+
+# graphs-------------
+
+MSM_UP_avgtotalflow <- ggplot(msmUP_Q, aes(x = day, y = total_flow, color = as.factor(tree))) + 
+  geom_line() +
+  facet_wrap(~tree) +
+  labs(title = "msm UP average flow per day",
+       x = "Day", 
+       y = "Mean Total Flow")
+
+
+msm_TR_avgtotalflow <- ggplot(msmTR_Q, aes(x = day, y = total_flow, color = as.factor(tree))) + 
+  geom_line() +
+  facet_wrap(~tree) +
+  labs(title = "msm TR average flow per day",
+       x = "Day", 
+       y = "Mean Total Flow")
+
+
+msm_avgtotalflow <- ggplot(Q_msm, aes(x = day)) +
+  geom_line(aes(y = TR_flow, color = "TR_flow")) +
+  geom_line(aes(y = UP_flow, color = "UP_flow"))+
+  labs(title = "msm TR and UP total average flow per day",
+       x = "Day", y = "Mean Total Flow", color = "tree") +
+  scale_color_manual(values = c("red", "blue"), name = "tree",
+                     labels = c("msm TR", "msm UP"))
+
+msm_avgflow_corrected_area <- ggplot(Q_msm, aes(x = day)) +
+  geom_line(aes(y = TR_flow/TR_A, color = "TR_flow")) +
+  geom_line(aes(y = UP_flow/UP_A, color = "UP_flow")) +
+  stat_smooth(aes(y = TR_flow/TR_A, color = "TR_flow"), se = FALSE) +
+  stat_smooth(aes(y = UP_flow/UP_A, color = "UP_flow"), se = FALSE) +
+  labs(title = "msm TR and UP total average flow per day corrected for total sapwood area for the site",
+       x = "Day", y = "Mean Total Flow per Unit Area (cm^3/hr)", color = "tree") +
+  scale_color_manual(values = c("red", "blue"), name = "tree",
+                     labels = c("msm TR", "msm UP"))
+
+
+msm_avgflow_corrected_area
+
+
+
+
+
+
