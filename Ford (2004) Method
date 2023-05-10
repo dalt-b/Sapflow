@@ -1,5 +1,3 @@
-
-
 pacman::p_load(lubridate, readr, dplyr, tidyr, ggplot2, tibble, cowplot, plotly, xts, 
                dygraphs, plantecophys,viridis, chron, sfsmisc)
 
