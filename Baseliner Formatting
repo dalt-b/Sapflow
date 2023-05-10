@@ -1,0 +1,136 @@
+pacman::p_load(lubridate, readr, dplyr, tidyr, ggplot2, tibble, cowplot, plotly, xts, 
+               dygraphs, plantecophys,viridis, chron)
+
+
+setwd()
+#Function to directly read the data as downloaded from the datalogger as needed.
+importCSdata <- function(filename,RetOpt="data"){
+  if(RetOpt=="info"){
+    # bring in entire header of CSI TOA5 data file for metadata
+    stn.info <- scan(file=filename,nlines=4,what=character(),sep="\r")
+    return(stn.info)
+  } else {
+    # second line of header contains variable names
+    header <- scan(file=filename,skip=1,nlines=1,what=character(),sep=",")
+    # bring in data
+    stn.data <- read.table(file=filename,skip=4,header=FALSE, na.strings=c("NAN"),sep=",")
+    names(stn.data) <- header
+    # add column of R-formatted date/timestamps
+    stn.data$TIMESTAMP <- as.POSIXct(strptime(stn.data$TIMESTAMP,"%Y-%m-%d %H:%M:%S"))
+    return(stn.data)}
+}
+
+# Create time series for entire timeframe 
+# Baseliner can only work withing a single calendar year
+# date, hour & minute intervals
+{sapflow_ts <- seq(from = ymd('20XX-01-01'), to = ymd('20XX-12-31'), by='days')
+  x_values <- rep(0:23, each = 4)
+  y_values <- rep(seq(0, 45, by = 15), times = 24)#per 15 min intervals
+  
+  hm <- data.frame(x = x_values, y = y_values)
+  chron(times = paste(sprintf("%02d", hm$x), ':', sprintf("%02d", hm$y), ':00'))
+  datetime <- merge(sapflow_ts, chron(time = paste(hm$x, ':', hm$y, ':', 0)))
+  colnames(datetime) <- c('date', 'time')
+  
+  # create datetime
+  datetime$TIMESTAMP <- (paste(datetime$date, datetime$time))
+  #next 2 lines make sure to skip daylight savings
+  #bci_datetime$TIMESTAMP <- as.POSIXct(bci_datetime$TIMESTAMP, format="%Y-%m-%d %H:%M:%S", tz="EST")
+  #bci_datetime$TIMESTAMP <- with_tz(bci_datetime$TIMESTAMP, tzone = "EST")
+  
+  # create right order
+  datetime <- datetime[order(datetime$TIMESTAMP), ]
+  row.names(datetime) <- NULL
+  datetime$TIMESTAMP <- ymd_hms(datetime$TIMESTAMP,tz="EST")
+  sapflow_ts<- select(datetime, TIMESTAMP)}
+
+
+
+# load and combine sap flow data
+{# specify the folder containing the  files
+  sapflow_path <- ""
+  
+  # get a list of all .dat files in the folder
+  sapflow_files <- list.files(path = sapflow_path, pattern = "*.dat", full.names = TRUE)
+  
+  # read in all .csv files and store them in a list and skip the first unwanted lines of the files
+  sapflow_list <- lapply(sapflow_files, read_csv, "data", skip = 4)
+  
+  # bind the list elements into a single data frame and change column names
+  sapflow <- bind_rows(sapflow_list)
+  
+  #remove data from new year, baseliner can only work with a jan-december in a single year
+  sapflow <- sapflow[-c(1:537,25826:26497),]
+  
+  colnames(sapflow) <- c("TIMESTAMP","record", "PB", "Statname","volt","s1","s2","s3","s4","s5","s6","s7","s8","s9","s10","s11","s12") 
+  
+  sapflow$TIMESTAMP <- ymd_hms(sapflow$TIMESTAMP,tz="EST")
+}
+merge(sapflow_ts, sapflow,by="TIMESTAMP",all.x=TRUE) -> sapflow
+# load and combine environmental data
+{
+  climate_path <- ""
+  
+  # get a list of all .csv files in the folder
+  climate_files <- list.files(path = climate_path, pattern = "*.dat", full.names = TRUE)
+  
+  # read in all .csv files and store them in a list and skip the first line of the file
+  climate_list <- lapply(climate_files, read_csv, skip = 1) 
+  
+  #column is a double class instead of a char and is not binding correctly
+  climate_list[[1]]$Invalid_Wind_Tot <- as.character(climate_list[[1]]$Invalid_Wind_Tot)
+  for (i in 1:length(climate_list)) {
+    climate_list[[i]]$Invalid_Wind_Tot <- as.character(climate_list[[i]]$Invalid_Wind_Tot)
+  }
+  
+  
+  # bind the list elements into a single data frame and change column names
+  climate<- bind_rows(climate_list) 
+  #remoVe data from new year, baseliner can only work with a jan-december in a single year
+  climate <- climate[-c(),]
+  
+}
+#separate environmental columns and find vpd THESE COLUMN NAMES WILL BE DIFFERENT BASED ON YOUR DATA
+climate$TIMESTAMP <- ymd_hms(climate$TIMESTAMP,tz="EST")
+climate %>%
+  mutate(AirT_C_Avg = as.numeric(AirT_C_Avg),
+         RH = as.numeric(RH),
+         PAR_Den_C_Avg = as.numeric(PAR_Den_C_Avg),
+         VPD = RHtoVPD(RH, AirT_C_Avg, Pa = 101)) %>%
+  select(TIMESTAMP,VPD,PAR_Den_C_Avg) -> climate
+
+# remove any rows that don't match up between sap flow and climate
+climate <- climate[-c(), ]
+sapflow <- sapflow[-c(),]
+
+rownames(climate) <- NULL
+rownames(sapflow) <- NULL
+
+#bind_cols(climate,upland)  -> df and fill missing vpd and par data
+df <- merge(sapflow,climate,by="TIMESTAMP",all.x=TRUE)
+df <-  df %>% fill(VPD, PAR_Den_C_Avg)
+
+#Rename columns as needed
+colnames(df)=c("time","record", "PB", "Statname","volt","s1","s2","s3","s4","s5","s6","s7",
+               "s8","s9","s10","s11","s12","vpd","par")
+# Format time column
+df$time<-ymd_hms(df$time,tz="EST")
+
+# Main step - this is where the data frame is organized the way it should be for Baseliner.
+b_df=data.frame(n=rep(1,nrow(df)),year=year(df$time),day=yday(df$time),
+                hour=format(as.POSIXct(strptime(df$time,"%Y-%m-%d %H:%M",tz="EST")),
+                            format = "%H%M"), vpd=df$vpd, rad=df$par,df[,6:17])
+
+
+
+#replace Na value with "NaN" so Baseliner can recognize them
+b_df[is.na(b_df)] <- "NaN"
+
+
+write_csv(b_df,"", col_names=FALSE)
+
+
+
+
+
+
