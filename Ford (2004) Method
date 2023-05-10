@@ -1,0 +1,102 @@
+
+
+pacman::p_load(lubridate, readr, dplyr, tidyr, ggplot2, tibble, cowplot, plotly, xts, 
+               dygraphs, plantecophys,viridis, chron, sfsmisc)
+
+
+setwd("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023")
+#read in K from Baseliner
+k_values <- read_csv("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023/MSM RAW/MSM TR sapflow/MSM_TR_2204-2212_K_VALUES.csv") 
+
+#Js= 42.84(k^1.231) the `.` is the imput value (the k value). this is in cm/hr
+js_values <- k_values %>%
+  mutate_at(vars(starts_with("s")), ~ 42.84 * .^1.231)
+
+lapply(js_values, as.numeric)
+
+colnames(js_values)=c("record","day","hour","vpd","par",
+                      "s1","s2","s3","s4","s5","s6","s7",
+                      "s8","s9","s10","s11", "s12")
+#shallow
+shallow_js_values <- js_values %>%
+  select(record, day, hour, "s1","s2","s3","s4","s5","s6","s7", "s8") %>%
+  pivot_longer(cols = starts_with("s"), names_to = "port", values_to = "value") %>%
+  mutate(port = parse_number(port), value = as.numeric(value))
+
+#deep
+
+deep_js_values <- js_values %>% 
+  select(record, day, hour , "s9", "s10", "s11", "s12") %>% rename(s3=s9,s4=s10,s5=s11,s7=s12) %>% select(record, day, hour, starts_with("s")) %>%
+  pivot_longer(cols = starts_with("s"), names_to = "port", values_to = "value") %>% mutate(port = parse_number(port), value = as.numeric(value))
+
+full <- merge(shallow_js_values[c("day", "hour", "port", "value")], 
+              deep_js_values[c("day", "hour", "port", "value")], 
+              by = c("day", "hour", "port"), all = TRUE)
+colnames(full) <- c("day", "hour", "tree", "shallow", "deep")
+
+
+# create a new column importing DBH and Sapwood area based on the tree
+DBH_table <- c("22.8", "26.8", "193.8", "19.6", "24.8", "22.4", "23.4", "20.8")
+SW_table <- c("4.1", "4.4", "3.7", "4.1", "5.7", "7.7", "5.1", "4.5")
+
+full$DBH <- as.numeric(DBH_table[full$tree])
+full$SW <- as.numeric(SW_table[full$tree])
+full <- full[-c(1:1736),]
+
+#Create a logical vector that indicates which rows have complete data
+complete_rows <- complete.cases(full)
+# Subset the data frame to include only rows with complete data
+df_complete <- full[complete_rows,]
+df_complete <- df_complete %>%
+  mutate(record = cumsum(tree == 3)) %>%
+  select(record, everything())
+
+#f(x)= αe^-0.5[(x-x0)/ β]^2 
+# x = the depth of deep sensor (3.5cm)
+# x0 = depth of shallow sensor (2cm)
+# α = max flux (usually occurs @ shallow sensor)
+# β = inverse of ΔJs/ΔSensorDepth
+
+#deep sensor value = 
+#(shallow sensor value) e^[-0.5((depth of deep sensor – depth of shallow sensor)/ inverse of(ΔJs/ΔSensorDepth)))^2)]
+
+#corrected$deep =  corrected$shallow * exp(-0.5 * ((3.5 - 2)/ β)^2)
+
+#rearrange: β = (x - x0) / (-2 * Ln(f(x)/α) )^0.5 
+# Calculate B using the appropriate formula based on the values of shallow and deep
+df_complete$B <- (3.5 - 2) / (-2 * 
+                                log(df_complete$deep / df_complete$shallow))^0.5
+df_complete <- df_complete[is.finite(df_complete$B), ]
+
+# integrate  in terms of the function of sapwood depth d
+# 2 * pi * (( DBH / 2 )- d ) * α * exp(-0.5 * ((x - x0)/β)^2)
+
+
+# make a vector to store the results the length of the data you are using
+results <- numeric(length(df_complete$shallow)) 
+
+# Define the function to be integrated
+# Junyan Mar. 21: changed x to df_complete$SW[i] in exponential term 
+    y <- function(x) {
+      2 * pi * (((df_complete$DBH[i] / 2) - df_complete$SW[i])
+                * df_complete$shallow[i] * 
+                  exp(-0.5 * ((df_complete$SW[i] - 2)/df_complete$B[i])^2))
+    }
+  
+  # Integrate the function
+  for (i in seq_along(df_complete$shallow)) {
+    results[i] <- integrate(Vectorize(y), lower = 0, upper = df_complete$SW[i])$value
+  }
+
+# Add to df
+df_complete$Q <- results
+
+#add record number to kepp track easily
+
+
+q <- ggplot(df_complete, mapping = aes(record, Q, color = as.factor(tree))) +
+  facet_wrap(~tree) +
+  geom_line()
+
+ggplotly(q)
+
