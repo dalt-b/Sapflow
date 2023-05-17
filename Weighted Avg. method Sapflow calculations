@@ -2,12 +2,11 @@ pacman::p_load(lubridate, readr, dplyr, tidyr, ggplot2, tibble, cowplot, plotly,
                dygraphs, plantecophys,viridis, chron, sfsmisc)
 
 
-setwd("")
+setwd("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023")
 #transition zone
 {
   
-  msmTR_kvalues <- read_csv("")
-  #calculate Js values from K
+  msmTR_kvalues <- read_csv("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023/MSM RAW/MSM TR sapflow/MSM_TR_2204-2212_K_VALUES.csv", skip= 215)
   msmTR_jsvalues <- msmTR_kvalues %>%
     mutate_at(vars(starts_with("s")), ~ 42.84 * .^1.231) %>%
     select(1:17)
@@ -43,7 +42,7 @@ setwd("")
 }
 #upland zone 
 {
-  msmUP_kvalues <- read_csv("")
+  msmUP_kvalues <- read_csv("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023/MSM RAW/MSM UP sapflow/MSM_UP_2204-2212_K_VALUES.csv", skip = 10486)
   msmUP_jsvalues <- msmUP_kvalues %>%
     mutate_at(vars(starts_with("s")), ~ 42.84 * .^1.231) %>%
     select(1:17)
@@ -79,7 +78,7 @@ setwd("")
   
 }
 
-#radial Flux and identifying the slope of the flux 'beta' in cm^3/hr
+#radial Flux and identifying the slope of the flux 'beta' or slope in cm^#/hr
 {
   #transition zone
   {
@@ -132,17 +131,20 @@ setwd("")
     SdfmsmTR <- split(dffullmsmTR, dffullmsmTR$tree)
     
     # Calculate the slope and length (len) of each line segment between consecutive points for each tree
+    #calculate the differences in the x-coordinates (diff_x) between consecutive points. 
+    #calculate the cumulative sum of the absolute differences in the x-coordinates (len) this will give the change in sapwood depth. 
+    #This gives us the distance along the x-axis for each line segment.
     slopesmsmTR <- lapply(SdfmsmTR, function(segments) {
       diff_y <- diff(segments$y)
       diff_x <- diff(segments$x)
-      len <- sqrt(diff_x^2 + diff_y^2)
+      len <- cumsum(abs(diff_x))
       slopemsmTR <- diff_y / diff_x
       return(data.frame(slopemsmTR, len))
     })
     
     # Calculate the weighted average slope for each tree
     msmTR_beta <- sapply(slopesmsmTR, function(df) {
-    ##  weighted.mean(df$slopemsmTR, df$len, na.rm = TRUE)  #this needs fixing df$len into x length not line length
+      weighted.mean(df$slopemsmTR, df$len, na.rm = TRUE)
     })
     
     #make into a datafrmae
@@ -216,12 +218,12 @@ setwd("")
     SdfmsmUP <- split(dffullmsmUP, dffullmsmUP$tree)
     
     # Calculate the slope and length (len) of each line segment between consecutive points for each tree
-    slopesmsmUP <- lapply(SdfmsmUP, function(segments) {
+    slopesmsmTR <- lapply(SdfmsmTR, function(segments) {
       diff_y <- diff(segments$y)
       diff_x <- diff(segments$x)
-      len <- sqrt(diff_x^2 + diff_y^2)
-      slopemsmUP <- diff_y / diff_x
-      return(data.frame(slopemsmUP, len))
+      len <- cumsum(abs(diff_x))
+      slopemsmTR <- diff_y / diff_x
+      return(data.frame(slopemsmTR, len))
     })
     
     # Calculate the weighted average slope for each tree
@@ -270,57 +272,57 @@ calculate_area <- function(dbh,sw) {
 calculate_flow <- function(sw, slope, shallow) {
   integrate(function(x) shallow + (slope * x), lower = 0, upper = sw)$value
 }
-#transition zone
-{
-  #average flow per tree per day
-  msmTR_Q <- msmTR_full %>%
-    select(-deep) %>%
-    aggregate(. ~ day + tree, mean) %>% select(-c (3))
+  #transition zone
+  {
+    #average flow per tree per day
+    msmTR_Q <- msmTR_full %>%
+      select(-deep) %>%
+      aggregate(. ~ day + tree, mean) %>% select(-c (3))
+    
+    
+    # Calculate the area of the annular pipe (sapwood) for each row
+    msmTR_Q <- msmTR_Q %>% mutate(A = calculate_area(dbh,sw))
+    
+    
+    # Calculate the average flow rate across the radius of sapwood
+    # Apply the flow function to each row of msmTR_Q
+    msmTR_Q$flow <- apply(msmTR_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
+    
+    # Calculate the total flow by multiplying the average flow rate by the area
+    msmTR_Q$total_flow <- msmTR_Q$flow * msmTR_Q$A
+    
+    #If Total flow is negative, make zer0
+    msmTR_Q$total_flow <- ifelse(msmTR_Q$total_flow < 0, 0, msmTR_Q$total_flow)
+    
+    
+    
+   } 
   
   
-  # Calculate the area of the annular pipe (sapwood) for each row
-  msmTR_Q <- msmTR_Q %>% mutate(A = calculate_area(dbh,sw))
+  #upland zone
+  {
+    #average flow per tree per day
+    msmUP_Q <- msmUP_full %>%
+      select(-deep) %>%
+      aggregate(. ~ day + tree, mean) %>% select(-c (3))
+    
+    
+    # Calculate the area of the annular pipe (sapwood) for each row
+    msmUP_Q <- msmUP_Q %>% mutate(A = calculate_area(dbh,sw))
+    
+    
+    # Calculate the average flow rate across the radius of sapwood
+    # Apply the flow function to each row of msmUP_Q
+    msmUP_Q$flow <- apply(msmUP_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
+    
+    
+    # Calculate the total flow by multiplying the average flow rate by the area
+    msmUP_Q$total_flow <- msmUP_Q$flow * msmUP_Q$A
+    
+    #If Total flow is negative, make zer0
+    msmUP_Q$total_flow <- ifelse(msmUP_Q$total_flow < 0, 0, msmUP_Q$total_flow)
   
-  
-  # Calculate the average flow rate across the radius of sapwood
-  # Apply the flow function to each row of msmTR_Q
-  msmTR_Q$flow <- apply(msmTR_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
-  
-  # Calculate the total flow by multiplying the average flow rate by the area
-  msmTR_Q$total_flow <- msmTR_Q$flow * msmTR_Q$A
-  
-  #If Total flow is negative, make zer0
-  msmTR_Q$total_flow <- ifelse(msmTR_Q$total_flow < 0, 0, msmTR_Q$total_flow)
-  
-  
-  
-} 
-
-
-#upland zone
-{
-  #average flow per tree per day
-  msmUP_Q <- msmUP_full %>%
-    select(-deep) %>%
-    aggregate(. ~ day + tree, mean) %>% select(-c (3))
-  
-  
-  # Calculate the area of the annular pipe (sapwood) for each row
-  msmUP_Q <- msmUP_Q %>% mutate(A = calculate_area(dbh,sw))
-  
-  
-  # Calculate the average flow rate across the radius of sapwood
-  # Apply the flow function to each row of msmUP_Q
-  msmUP_Q$flow <- apply(msmUP_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
-  
-  
-  # Calculate the total flow by multiplying the average flow rate by the area
-  msmUP_Q$total_flow <- msmUP_Q$flow * msmUP_Q$A
-  
-  #If Total flow is negative, make zer0
-  msmUP_Q$total_flow <- ifelse(msmUP_Q$total_flow < 0, 0, msmUP_Q$total_flow)
-  
-}
+  }
 
 #average Q , slope, Area per site per day
 {# Aggregate total flow by day for msmTR_Q
@@ -337,7 +339,7 @@ calculate_flow <- function(sw, slope, shallow) {
   # Combine the two dataframes into one using the "day" column as the key
   Q_msm <- merge(msmTR_Q_agg, msmUP_Q_agg, by = "day", all = TRUE)
 }
-
+  
 # graphs-------------
 
 MSM_UP_avgtotalflow <- ggplot(msmUP_Q, aes(x = day, y = total_flow, color = as.factor(tree))) + 
@@ -380,5 +382,5 @@ msm_avgflow_corrected_area
 
 
 
-
-
+  
+  
