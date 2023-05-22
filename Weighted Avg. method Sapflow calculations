@@ -137,14 +137,15 @@ setwd("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023")
     slopesmsmTR <- lapply(SdfmsmTR, function(segments) {
       diff_y <- diff(segments$y)
       diff_x <- diff(segments$x)
-      len <- cumsum(abs(diff_x))
+      len <- c(0, cumsum(abs(diff_x)))
+      len_diff <- c(0, diff(len)) [-1]
       slopemsmTR <- diff_y / diff_x
-      return(data.frame(slopemsmTR, len))
+      return(data.frame(slopemsmTR, len_diff))
     })
-    
+       
     # Calculate the weighted average slope for each tree
     msmTR_beta <- sapply(slopesmsmTR, function(df) {
-      weighted.mean(df$slopemsmTR, df$len, na.rm = TRUE)
+      weighted.mean(df$slopemsmTR, df$len_diff, na.rm = TRUE)
     })
     
     #make into a datafrmae
@@ -218,17 +219,19 @@ setwd("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023")
     SdfmsmUP <- split(dffullmsmUP, dffullmsmUP$tree)
     
     # Calculate the slope and length (len) of each line segment between consecutive points for each tree
-    slopesmsmTR <- lapply(SdfmsmTR, function(segments) {
+    slopesmsmUP <- lapply(SdfmsmTR, function(segments) {
       diff_y <- diff(segments$y)
       diff_x <- diff(segments$x)
-      len <- cumsum(abs(diff_x))
-      slopemsmTR <- diff_y / diff_x
-      return(data.frame(slopemsmTR, len))
+      len <- c(0, cumsum(abs(diff_x)))
+      len_diff <- c(0, diff(len)) [-1]
+      slopemsmUP <- diff_y / diff_x
+      return(data.frame(slopemsmUP, len_diff))
     })
+ 
     
     # Calculate the weighted average slope for each tree
     msmUP_beta <- sapply(slopesmsmUP, function(df) {
-      weighted.mean(df$slopemsmUP, df$len, na.rm = TRUE)
+      weighted.mean(df$slopemsmUP, df$len_diff, na.rm = TRUE)
     })
     
     #make into a datafrmae
@@ -277,16 +280,16 @@ calculate_flow <- function(sw, slope, shallow) {
     #average flow per tree per day
     msmTR_Q <- msmTR_full %>%
       select(-deep) %>%
-      aggregate(. ~ day + tree, mean) %>% select(-c (3))
+      aggregate(. ~ day + tree, mean) %>% select(-c (3,7))
     
     
-    # Calculate the area of the annular pipe (sapwood) for each row
+    # Calculate the area of the annular pipe (sapwood) for each row in cm^3
     msmTR_Q <- msmTR_Q %>% mutate(A = calculate_area(dbh,sw))
     
     
     # Calculate the average flow rate across the radius of sapwood
     # Apply the flow function to each row of msmTR_Q
-    msmTR_Q$flow <- apply(msmTR_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
+    msmTR_Q$flow <- apply(msmTR_Q, 1, function(row) calculate_flow(row["sw"], row["slope.y"], row["shallow"]))
     
     # Calculate the total flow by multiplying the average flow rate by the area
     msmTR_Q$total_flow <- msmTR_Q$flow * msmTR_Q$A
@@ -294,17 +297,15 @@ calculate_flow <- function(sw, slope, shallow) {
     #If Total flow is negative, make zer0
     msmTR_Q$total_flow <- ifelse(msmTR_Q$total_flow < 0, 0, msmTR_Q$total_flow)
     
-    
-    
    } 
   
   
   #upland zone
   {
     #average flow per tree per day
-    msmUP_Q <- msmUP_full %>%
+     msmUP_Q <- msmUP_full %>%
       select(-deep) %>%
-      aggregate(. ~ day + tree, mean) %>% select(-c (3))
+      aggregate(. ~ day + tree, mean) %>% select(-c (3,7))
     
     
     # Calculate the area of the annular pipe (sapwood) for each row
@@ -313,7 +314,7 @@ calculate_flow <- function(sw, slope, shallow) {
     
     # Calculate the average flow rate across the radius of sapwood
     # Apply the flow function to each row of msmUP_Q
-    msmUP_Q$flow <- apply(msmUP_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
+    msmUP_Q$flow <- apply(msmUP_Q, 1, function(row) calculate_flow(row["sw"], row["slope.y"], row["shallow"]))
     
     
     # Calculate the total flow by multiplying the average flow rate by the area
@@ -326,12 +327,12 @@ calculate_flow <- function(sw, slope, shallow) {
 
 #average Q , slope, Area per site per day
 {# Aggregate total flow by day for msmTR_Q
-  msmTR_Q_agg <- aggregate(cbind(A, slope, total_flow) ~ day, data = msmTR_Q, mean)
+  msmTR_Q_agg <- aggregate(cbind(A, slope.y, total_flow) ~ day, data = msmTR_Q, mean)
   
   # Rename 
   names(msmTR_Q_agg)[2:4] <- c("TR_A", "TR_slope", "TR_flow")
   # Aggregate total flow by day for msmUP_Q
-  msmUP_Q_agg <-  aggregate(cbind(A, slope, total_flow) ~ day, data = msmUP_Q, mean)
+  msmUP_Q_agg <-  aggregate(cbind(A, slope.y, total_flow) ~ day, data = msmUP_Q, mean)
   
   # Rename the "total_flow" column to "msmUP_Q_total_flow"
   names(msmUP_Q_agg)[2:4] <- c("UP_A", "UP_slope", "UP_flow")
