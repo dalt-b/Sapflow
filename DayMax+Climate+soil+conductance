@@ -1,0 +1,403 @@
+pacman::p_load(lubridate, readr, dplyr, tidyr, ggplot2, tibble, cowplot, plotly, xts, 
+               dygraphs, plantecophys,viridis, chron, sfsmisc)
+
+{{
+  setwd("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023")
+  #transition zone
+  {
+    
+    msmTR_kvalues <- read_csv("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023/MSM RAW/MSM TR sapflow/MSM_TR_2204-2212_K_VALUES.csv", skip= 215)
+    msmTR_jsvalues <- msmTR_kvalues %>%
+      mutate_at(vars(starts_with("s")), ~ 42.84 * .^1.231) %>%
+      select(1:17)
+    lapply(msmTR_jsvalues, as.numeric)
+    colnames(msmTR_jsvalues)=c("record","day","hour","vpd","par",
+                               "s1","s2","s3","s4","s5","s6","s7",
+                               "s8","s9","s10","s11","s12")
+    #add and format and average all data
+    
+    
+    #shallow
+    msmTR_shallow <- msmTR_jsvalues %>%
+      select(day, hour, "s1","s2","s3","s4","s5","s6","s7", "s8") %>%
+      pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>%
+      mutate(sensor = parse_number(sensor), value = as.numeric(value))
+    
+    #deep
+    
+    msmTR_deep <- msmTR_jsvalues %>% 
+      select(day, hour , "s9", "s10", "s11", "s12") %>% rename(s3=s9,s4=s10,s5=s11,s7=s12) %>% select(day, hour, starts_with("s")) %>%
+      pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>% mutate(sensor = parse_number(sensor), value = as.numeric(value))
+    
+    msmTR_full <- merge(msmTR_shallow[c("day", "hour", "sensor", "value")], 
+                        msmTR_deep[c("day", "hour", "sensor", "value")], 
+                        by = c("day", "hour", "sensor"), all = TRUE)
+    colnames(msmTR_full) <- c("day", "hour", "tree", "shallow", "deep")
+    
+    msmTR_full$dbh <-c("22.8", "26.8", "19.8", "19.6", "24.8", "22.4", "23.4", "20.8")
+    msmTR_full$sw <- c("4.1", "4.4", "3.7", "4.1", "5.7", "7.7", "5.1", "4.5")
+    
+    msmTR_full <- apply(msmTR_full, 2, as.numeric)
+    msmTR_full <- as.data.frame(msmTR_full)
+  }
+  #upland zone 
+  {
+    msmUP_kvalues <- read_csv("C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023/MSM RAW/MSM UP sapflow/MSM_UP_2204-2212_K_VALUES.csv", skip = 10486)
+    msmUP_jsvalues <- msmUP_kvalues %>%
+      mutate_at(vars(starts_with("s")), ~ 42.84 * .^1.231) %>%
+      select(1:17)
+    lapply(msmUP_jsvalues, as.numeric)
+    colnames(msmUP_jsvalues)=c("record","day","hour","vpd","par",
+                               "s1","s2","s3","s4","s5","s6","s7",
+                               "s8","s9","s10","s11","s12")
+    
+    #add and format and average all data
+    
+    
+    #shallow
+    msmUP_shallow <- msmUP_jsvalues %>%
+      select(day, hour, "s1","s2","s3","s4","s5","s6","s7", "s8") %>%
+      pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>%
+      mutate(sensor = parse_number(sensor), value = as.numeric(value))
+    
+    #deep
+    
+    msmUP_deep <- msmUP_jsvalues %>% 
+      select(day, hour , "s9", "s10", "s11", "s12") %>% rename(s1=s9,s2=s10,s3=s11,s4=s12) %>% select(day, hour, starts_with("s")) %>%
+      pivot_longer(cols = starts_with("s"), names_to = "sensor", values_to = "value") %>% mutate(sensor = parse_number(sensor), value = as.numeric(value))
+    
+    msmUP_full <- merge(msmUP_shallow[c("day", "hour", "sensor", "value")], 
+                        msmUP_deep[c("day", "hour", "sensor", "value")], 
+                        by = c("day", "hour", "sensor"), all = TRUE)
+    colnames(msmUP_full) <- c("day", "hour", "tree", "shallow", "deep")
+    
+    msmUP_full$dbh <-c("31.4", "45.0", "24.8", "32.4", "32.6", "34.8", "39.8", "36.2")
+    msmUP_full$sw <- c("4.5", "7.3", "7", "7.1", "7.9", "8.9", "8.7", "5.3")
+    msmUP_full <- apply(msmUP_full, 2, as.numeric)
+    msmUP_full <- as.data.frame(msmUP_full)
+    
+  }
+  
+  #radial Flux and identifying the slope of the flux 'beta' or slope in cm^#/hr
+  {
+    #transition zone
+    {
+      # calculate the averages of the shallow, deep, and SW columns for each tree
+      msmTR_full_average <- msmTR_full %>%
+        select(tree, shallow, deep, sw) %>%
+        group_by(tree) %>%
+        summarize(s_avg = mean(shallow, na.rm = TRUE),
+                  d_avg = mean(deep, na.rm = TRUE),
+                  swdepth = first(sw),
+                  sw_avg = 0) %>%
+        mutate(sdepth = 2,
+               swdepth = as.numeric(swdepth),
+               ddepth = 3.5,
+               zer0depth = 0,
+               zer0avg = as.numeric(s_avg)) %>%
+        select(tree, zer0depth, zer0avg, sdepth, s_avg, ddepth, d_avg, swdepth, sw_avg)
+      
+      dffullmsmTR <- bind_cols(
+        msmTR_full_average %>%
+          select(-3, -5, -7, -9) %>%
+          pivot_longer(
+            cols = -tree,
+            names_to = "xcol",
+            values_to = "x"
+          ),
+        msmTR_full_average %>%
+          select(-2, -4, -6, -8) %>%
+          pivot_longer(
+            cols = -tree,
+            names_to = "ycol",
+            values_to = "y"
+          ) %>%
+          select(-tree)
+      ) %>%
+        select(-xcol, -ycol) %>%
+        mutate(tree = factor(tree))
+      
+      
+      
+      # add rows to the dataframe to create a complete grid of x and y values for each tree
+      dffullmsmTR <- bind_rows(
+        # add the original data frame, excluding rows with NaN values
+        dffullmsmTR[complete.cases(dffullmsmTR), ]
+      )
+      
+      
+      #what are the slopes (beta)?
+      # Split the data by tree
+      SdfmsmTR <- split(dffullmsmTR, dffullmsmTR$tree)
+      
+      # Calculate the slope and length (len) of each line segment across the x axis between consecutive points for each tree
+      #calculate the differences in the x-coordinates (diff_x) between consecutive points. 
+      #calculate the cumulative sum of the absolute differences in the x-coordinates (len) this will give the change in sapwood depth. 
+      #This gives us the distance along the x-axis for each line segment.
+      slopesmsmTR <- lapply(SdfmsmTR, function(segments) {
+        diff_y <- diff(segments$y)
+        diff_x <- diff(segments$x)
+        len <- c(0, cumsum(abs(diff_x)))
+        len_diff <- c(0, diff(len)) [-1]
+        slopemsmTR <- diff_y / diff_x
+        return(data.frame(slopemsmTR, len_diff))
+      })
+      
+      
+      
+      # Calculate the weighted average slope for each tree
+      msmTR_beta <- sapply(slopesmsmTR, function(df) {
+        weighted.mean(df$slopemsmTR, df$len_diff, na.rm = TRUE)
+      })
+      
+      #make into a datafrmae
+      msmTR_beta <-data.frame(msmTR_beta) %>% mutate(tree = 1:8) %>% rename(slope = 1)
+      
+      msmTR_full <- merge(msmTR_full, msmTR_beta, by = "tree")
+      
+      
+      # create a scatterplot of the data with lines connecting the points
+      dffullplot_msmTR <- ggplot(dffullmsmTR, aes(x, y, color = tree)) +
+        geom_point(size = 2) +
+        geom_line(aes(group = tree)) +
+        labs(title = "msm TR Radial Sap Flux",
+             subtitle = "Change in Sap Flux in Relation to Cambrium Depth; sensors at 2cm",
+             x = "Cambrium Depth",
+             y = "Sap Flux (cm^3/hr)")
+      
+      
+      
+      dffullplot_msmTR
+      
+    }
+    #upland zone
+    {
+      # calculate the averages of the shallow, deep, and SW columns for each tree
+      msmUP_full_average <- msmUP_full %>%
+        select(tree, shallow, deep, sw) %>%
+        group_by(tree) %>%
+        summarize(s_avg = mean(shallow, na.rm = TRUE),
+                  d_avg = mean(deep, na.rm = TRUE),
+                  swdepth = first(sw),
+                  sw_avg = 0) %>%
+        mutate(sdepth = 2,
+               swdepth = as.numeric(swdepth),
+               ddepth = 3.5,
+               zer0depth = 0,
+               zer0avg = as.numeric(s_avg)) %>%
+        select(tree, zer0depth, zer0avg, sdepth, s_avg, ddepth, d_avg, swdepth, sw_avg)
+      
+      dffullmsmUP <- bind_cols(
+        msmUP_full_average %>%
+          select(-3, -5, -7, -9) %>%
+          pivot_longer(
+            cols = -tree,
+            names_to = "xcol",
+            values_to = "x"
+          ),
+        msmUP_full_average %>%
+          select(-2, -4, -6, -8) %>%
+          pivot_longer(
+            cols = -tree,
+            names_to = "ycol",
+            values_to = "y"
+          ) %>%
+          select(-tree)
+      ) %>%
+        select(-xcol, -ycol) %>%
+        mutate(tree = factor(tree))
+      
+      
+      
+      # add rows to the dataframe to create a complete grid of x and y values for each tree
+      dffullmsmUP <- bind_rows(
+        # add the original data frame, excluding rows with NaN values
+        dffullmsmUP[complete.cases(dffullmsmUP), ]
+      )
+      
+      
+      #what are the slopes (beta)?
+      # Split the data by tree
+      SdfmsmUP <- split(dffullmsmUP, dffullmsmUP$tree)
+      
+      # Calculate the slope and length (len) of each line segment between consecutive points for each tree
+      slopesmsmUP <- lapply(SdfmsmTR, function(segments) {
+        diff_y <- diff(segments$y)
+        diff_x <- diff(segments$x)
+        len <- c(0, cumsum(abs(diff_x)))
+        len_diff <- c(0, diff(len)) [-1]
+        slopemsmUP <- diff_y / diff_x
+        return(data.frame(slopemsmUP, len_diff))
+      })
+      
+      
+      # Calculate the weighted average slope for each tree
+      msmUP_beta <- sapply(slopesmsmUP, function(df) {
+        weighted.mean(df$slopemsmUP, df$len_diff, na.rm = TRUE)
+      })
+      
+      #make into a datafrmae
+      msmUP_beta <-data.frame(msmUP_beta) %>% mutate(tree = 1:8) %>% rename(slope = 1)
+      
+      msmUP_full <- merge(msmUP_full, msmUP_beta, by = "tree")
+      
+      
+      # create a scatterplot of the data with lines connecting the points
+      dffullplot_msmUP <- ggplot(dffullmsmUP, aes(x, y, color = tree)) +
+        geom_point(size = 2) +
+        geom_line(aes(group = tree)) +
+        labs(title = "msm UP Radial Sap Flux",
+             subtitle = "Change in Sap Flux in Relation to Cambrium Depth; sensors at 2cm",
+             x = "Cambrium Depth",
+             y = "Sap Flux (cm^3/hr)")
+      
+      
+      
+      dffullplot_msmUP
+    }
+  }
+  
+  #calculating total flow 'Q'
+  # Define the equation for the area of the annular pipe (sapwood)
+  calculate_area <- function(dbh,sw) {
+    diameter <- dbh
+    outer_r <- dbh/2
+    inner_r <-  (dbh/2) - sw
+    return(pi * (outer_r^2 - inner_r^2))    
+  }
+}
+
+#calculating total flow 'Q'
+# Define the equation for the area of the annular pipe (sapwood)
+calculate_area <- function(dbh,sw) {
+  diameter <- dbh
+  outer_r <- dbh/2
+  inner_r <-  (dbh/2) - sw
+  return(pi * (outer_r^2 - inner_r^2))    
+}
+
+
+#define equation for the calculation of average flow across the radius of the sapwood
+{#code applies the calculate_flow function to each row of msmTR_Q, passing the values of sw, slope, and shallow in the current row as arguments. 
+  #The apply function is used to apply a function to each row.
+  #The calculate_flow function takes three arguments: sw, which is the sapwood thickness for the current row; slope, which is the slope of the relationship between flow rate and radial distance from the outsode of the sapwood of the current row; and shallow, which is the base flow rate for the current row.
+  #The integrate function is called inside the calculate_flow function to integrate the function shallow + slope * x with respect to x over the interval from 0 to sw. This gives us the flow rate for the current row.
+  #This flow value is the calculated flow across an single radius of the sapwood which then can be multiplied by the area to determine the total flow within a cross section of the tree
+}
+
+calculate_flow <- function(sw, slope, shallow) {
+  integrate(function(x) shallow + (slope * x), lower = 0, upper = sw)$value
+}
+#transition zone
+{
+  #average flow per tree per day
+  msmTR_Q <- msmTR_full %>%
+    select(-deep) %>%
+    aggregate(. ~ day + tree, mean) %>% select(-c (3))
+  
+  
+  # Calculate the area of the annular pipe (sapwood) for each row in cm^3
+  msmTR_Q <- msmTR_Q %>% mutate(A = calculate_area(dbh,sw))
+  
+  
+  # Calculate the average flow rate across the radius of sapwood
+  # Apply the flow function to each row of msmTR_Q
+  msmTR_Q$radial_flow <- apply(msmTR_Q, 1, function(row) calculate_flow(row["sw"], row["slope"], row["shallow"]))
+  
+  # Calculate the total flow by multiplying the average flow rate by the area
+  msmTR_Q$area_flow <- msmTR_Q$radial_flow * msmTR_Q$A
+  
+  #If Total flow is negative, make zer0
+  msmTR_Q$area_flow <- ifelse(msmTR_Q$area_flow < 0, 0, msmTR_Q$area_flow)   
+  
+}
+
+}
+{climate_path <- "C:/Users/boog263/OneDrive - PNNL/Documents/Sapflow/2023/MSM RAW/MSM climate"
+  
+  # get a list of all .csv files in the folder
+  climate_files <- list.files(path = climate_path, pattern = "*.dat", full.names = TRUE)
+  
+  # read in all .csv files and store them in a list and skip the first line of the file
+  climate_list <- lapply(climate_files, read_csv, skip = 1) 
+  
+  #column is a double class instead of a char and is not binding correctly
+  climate_list[[1]]$Invalid_Wind_Tot <- as.character(climate_list[[1]]$Invalid_Wind_Tot)
+  for (i in 1:length(climate_list)) {
+    climate_list[[i]]$Invalid_Wind_Tot <- as.character(climate_list[[i]]$Invalid_Wind_Tot)
+  }
+  
+  
+  # bind the list elements into a single data frame and change column names
+  climate<- bind_rows(climate_list) 
+  #remoVe data from new year, baseliner can only work with a jan-december in a single year
+  climate <- climate[-c(1:156,6473:9240),] %>% select(c(1,12))
+  
+  
+  # Create a dataframe with NAs
+  na_rows <- data.frame(TIMESTAMP = NA, AirT_C_Avg = NA)
+  
+  # Add NAs between each row
+  new_df <- bind_rows(climate, na_rows) %>%
+    slice(rep(row_number(), each = 4))
+  
+  # Reset row names
+  rownames(new_df) <- NULL
+  new_df <- new_df[-c(25225:25268),]
+  # Print the resulting dataframe
+  print(new_df)
+  
+  tr_clime <- cbind(msmTR_jsvalues, new_df$AirT_C_Avg) %>%
+    `colnames<-`(c(colnames(msmTR_jsvalues), "temp")) %>%
+    select(-record)
+  
+  merged_trclime <- merge(msmTR_full, tr_clime[c("day", "hour", "temp", "vpd", "par")], by = c("day", "hour")) %>%
+    mutate_all(as.numeric)
+}
+# Define the calculate_flow function
+calculate_maxflow <- function(sw, slope, shallow) {
+  f <- function(x) shallow + slope * x  # Define the function to integrate
+  integral <- integral(f, 0, sw)  # Perform numerical integration
+  return(integral)
+}
+
+# Define the calculate_flow function
+calculate_flow <- function(sw, slope, shallow) {
+  if (is.na(shallow) || shallow == 0) {
+    return(NA)  # Skip the row and return NA
+  } else {
+    return(integrate(function(x) shallow + (slope * x), lower = 0, upper = sw)$value)
+  }
+}
+
+
+msmTR_Q <- msmTR_full %>%
+  select(-deep) %>% 
+  mutate(A = calculate_area(dbh,sw))
+
+# Calculate the flow rate across the radius of sapwood
+msmTR_Q$radial_flow <- mapply(calculate_flow, msmTR_Q$sw, msmTR_Q$slope, msmTR_Q$shallow)
+
+
+#filter for between 1100hrs - 1400hrs and take the average for that timeframe
+
+TR_midday <- msmTR_Q %>%
+  filter(hour >= 1100, hour <= 1400) %>%
+  group_by(tree, day) %>%
+  mutate(shallow = mean(shallow, na.rm = TRUE),
+         radial_flow = mean(radial_flow, na.rm = TRUE)) %>%
+  distinct(tree, day, .keep_all = TRUE)
+
+# Calculate the total flow by multiplying the average flow rate by the area
+TR_midday$area_flow <- TR_midday$radial_flow * TR_midday$A
+
+
+TR_midday <- merge(TR_midday, tr_clime[c("day", "hour", "vpd", "temp", "par")], by = c("day", "hour")) %>%
+  mutate_all(as.numeric) %>%
+  select(- hour)
+
+#conductance
+#find elevation#[,] : according to https://mapcarta.com/21070966 it is 3 meters
+TR_midday_con <- TR_midday %>%
+  mutate(conductance = ((115.8 + (0.4236 * temp * radial_flow)) / vpd) * 44.6 * (273 / (273 + temp)) * 2.703 ^ -0.00012 * 3)
+
